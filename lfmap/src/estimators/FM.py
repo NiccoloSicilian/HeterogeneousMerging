@@ -4,12 +4,13 @@ from utils.descriptors import *
 from utils.metrics import distance_function, inverse_distance_function
 
 class FM:
-    def __init__(self, X: np.ndarray, Y: np.ndarray, anchors: np.ndarray, 
+    def __init__(self, X: np.ndarray, Y: np.ndarray, anchors: np.ndarray,
                  X_labels: np.ndarray = None, Y_labels: np.ndarray = None,
                  graph_algo: str = 'knn', graph_kernel: str = 'gaussian', graph_similarity: str = 'euclidean',
-                 num_eigs: int = 50, descriptors: tuple = ('dist_geod', 'label'), dim_manifold: int = 3, k: int = None, 
-                 n_descr: int = 10, compute_gt_map: bool = False, graphs: tuple = None, 
-                 compute_measures: bool = False, reg_weights: dict = None, refine: bool = True):
+                 num_eigs: int = 50, descriptors: tuple = ('dist_geod', 'label'), dim_manifold: int = 3, k: int = None,
+                 n_descr: int = 10, compute_gt_map: bool = False, graphs: tuple = None,
+                 compute_measures: bool = False, reg_weights: dict = None, refine: bool = True,
+                 device=None):
         """From X to Y
         :param X: source point space, (n_samplesX, n_featuresX)
         :param Y: target point space, (n_samplesY, n_featuresY)
@@ -20,19 +21,21 @@ class FM:
         :param graph_kernel: kernel to build the graph, 'gaussian' or 'distance'
         :param graph_similarity: similarity metric to build the graph, 'euclidean' or 'cosine'
         :param num_eigs: number of eigenpairs to compute
-        :param k: number of neighbors for k-NN graph construction 
-        :param descriptor: tuple of descriptors to use between {'dist_geod', 'dist_cosine', 'dist_l2', 'label', 'HKS', 'WKS', 'LM'} 
+        :param k: number of neighbors for k-NN graph construction
+        :param descriptor: tuple of descriptors to use between {'dist_geod', 'dist_cosine', 'dist_l2', 'label', 'HKS', 'WKS', 'LM'}
         :param compute_gt_map: compute the ground truth map assuming identity as correspondence (optional)
         :param graphs: precomputed graphs (optional)
         :param compute_measures: compute the measures of the functional map (optional)
         :param reg_weights: regularization weights for the functional map (optional)
         :param refine: refine the functional map using graph zoomout (optional)
+        :param device: torch device for GPU computation, e.g. torch.device('cuda') (optional)
         """
         self.X = X
         self.Y = Y
         self.anchors = anchors
         self.X_labels = X_labels
         self.Y_labels = Y_labels
+        self.device = device
 
         self.attr = []
 
@@ -45,9 +48,9 @@ class FM:
             self.eigvals2, self.eigvecs2 = self.G2.eigvals, self.G2.eigvecs
         else:
             # build graph
-            self.G1 = build_graph(X, algo=graph_algo, kernel=graph_kernel, similarity=graph_similarity, m=dim_manifold, k=k)
+            self.G1 = build_graph(X, algo=graph_algo, kernel=graph_kernel, similarity=graph_similarity, m=dim_manifold, k=k, device=device)
             print(f"Is connected? {self.G1.G.isconnected()}")
-            self.G2 = build_graph(Y, algo=graph_algo, kernel=graph_kernel, similarity=graph_similarity, m=dim_manifold, k=k)
+            self.G2 = build_graph(Y, algo=graph_algo, kernel=graph_kernel, similarity=graph_similarity, m=dim_manifold, k=k, device=device)
             print(f"Is connected? {self.G2.G.isconnected()}")
 
             # compute eigenvalues and eigenvectors
@@ -152,12 +155,12 @@ class FM:
         self.C = rfm(all_X_desc.squeeze(),all_Y_desc.squeeze(),
                 self.eigvecs1, self.eigvecs2, self.eigvals1, self.eigvals2,
                 w_descr=self.w_descr, w_lap=self.w_lap, w_dcomm=self.w_dcomm, w_orient=self.w_orient, #w_lap=1e-3, w_dcomm=1e-1,
-                optinit="identity") # [k2,k1],  X -> Y
-        
+                optinit="identity", device=self.device) # [k2,k1],  X -> Y
+
         if refine:
-            self.C = graph_zoomout_refine(self.C[:self.num_eigs-nit,:self.num_eigs-nit], 
-                            self.eigvecs1[:,:self.num_eigs+nit], self.eigvecs2[:,:self.num_eigs+nit],  self.G2, self.G1, 
-                          nit=nit, step=1, subsample=0, return_p2p=False, n_jobs=1)
+            self.C = graph_zoomout_refine(self.C[:self.num_eigs-nit,:self.num_eigs-nit],
+                            self.eigvecs1[:,:self.num_eigs+nit], self.eigvecs2[:,:self.num_eigs+nit],  self.G2, self.G1,
+                          nit=nit, step=1, subsample=0, return_p2p=False, n_jobs=1, device=self.device)
         # self.Phi_flat = FM_to_p2p(self.C, self.eigvecs1, self.eigvecs2,  use_adj=True, n_jobs=1) # (n1,), indices of the closest point in the first shape for each point in the second shape
         # Phi = np.zeros((n,n))
         # Phi[np.arange(n),Phi_flat] = 1 # (n2,n1), S2 -> S1
@@ -189,24 +192,36 @@ class FM_distfunc(FM):
 
 class FM_T(FM):
 
-    def __init__(self, X: np.ndarray, Y: np.ndarray, anchors: np.ndarray, transformation: str = 'linear', 
-                 X_labels: np.ndarray = None, Y_labels: np.ndarray = None, graph_algo: str = 'knn', 
-                 graph_kernel: str = 'distance', graph_similarity: str = 'euclidean', num_eigs: int = 50, 
-                 descriptors: tuple = ('dist_geod', 'label'), **kwargs):
+    def __init__(self, X: np.ndarray, Y: np.ndarray, anchors: np.ndarray, transformation: str = 'linear',
+                 X_labels: np.ndarray = None, Y_labels: np.ndarray = None, graph_algo: str = 'knn',
+                 graph_kernel: str = 'distance', graph_similarity: str = 'euclidean', num_eigs: int = 50,
+                 descriptors: tuple = ('dist_geod', 'label'), rank: int = None, **kwargs):
         self.transformation = transformation
+        self.rank = rank
         super().__init__(X, Y, anchors, X_labels, Y_labels, graph_algo, graph_kernel, graph_similarity, num_eigs, descriptors, **kwargs)
 
     def fit(self, refine=True, nit=10):
         super().fit(refine=refine, nit=nit)
-        self.Phi_flat = FM_to_p2p(self.C, self.eigvecs1, self.eigvecs2,  use_adj=False, n_jobs=1) # (n1,), indices of the closest point in the first shape for each point in the second shape
+        self.Phi_flat = FM_to_p2p(self.C, self.eigvecs1, self.eigvecs2,  use_adj=False, n_jobs=1, device=self.device) # (n1,), indices of the closest point in the first shape for each point in the second shape
+
+        # ensure X and Y are torch tensors on the right device
+        dev = self.device if self.device is not None else 'cpu'
+        X_t = self.X if isinstance(self.X, torch.Tensor) else torch.tensor(np.asarray(self.X), dtype=torch.float32)
+        Y_t = self.Y if isinstance(self.Y, torch.Tensor) else torch.tensor(np.asarray(self.Y), dtype=torch.float32)
+        X_t = X_t.to(dev)
+        Y_t = Y_t.to(dev)
+
         # compute the transformation matrix
         if self.transformation == 'linear':
-            self.T = torch.linalg.lstsq(self.X, self.Y[self.Phi_flat]).solution
+            self.T = torch.linalg.lstsq(X_t, Y_t[self.Phi_flat]).solution
         elif self.transformation == 'orthogonal':
             # Procrustes: min ||X @ T - Y[Phi]||_F  s.t. T.T @ T = I
             # Solution: T = V @ U.T  where  Y[Phi].T @ X = U @ S @ V.T
-            M = self.Y[self.Phi_flat].T @ self.X
+            M = Y_t[self.Phi_flat].T @ X_t
             U, S, Vh = torch.linalg.svd(M, full_matrices=False)
+            if self.rank is not None:
+                U  = U[:, :self.rank]
+                Vh = Vh[:self.rank, :]
             self.T = (Vh.T @ U.T)
         else:
             raise NotImplementedError(f"{self.transformation} transformation not implemented")
@@ -216,6 +231,9 @@ class FM_T(FM):
         Transform point from X to Y
         """
         if self.transformation == 'linear':
+            if not isinstance(x, torch.Tensor):
+                x = torch.tensor(np.asarray(x), dtype=torch.float32)
+            x = x.to(self.T.device)
             return x @ self.T
         else:
             raise NotImplementedError(f"{self.transformation} transformation not implemented")

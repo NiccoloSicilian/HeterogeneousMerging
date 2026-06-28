@@ -24,7 +24,7 @@ from sklearn.neighbors import NearestNeighbors
 # https://github.com/RobinMagnet/pyFM/blob/master/pyFM/refine/icp.py
 
 
-def knn_query(X, Y, k=1, return_distance=False,metric='minkowski', n_jobs=1):
+def knn_query(X, Y, k=1, return_distance=False,metric='minkowski', n_jobs=1, device=None):
     """
     Query nearest neighbors.
 
@@ -35,15 +35,19 @@ def knn_query(X, Y, k=1, return_distance=False,metric='minkowski', n_jobs=1):
     k : int - number of neighbors to look for
     return_distance : whether to return the nearest neighbor distance
     n_jobs          : number of parallel jobs. Set to -1 to use all processes
+    device          : torch device for GPU computation (None for CPU path)
 
     Output
     -------------------------------
     dists   : (n2,k) or (n2,) if k=1 - ONLY if return_distance is False. Nearest neighbor distance.
     matches : (n2,k) or (n2,) if k=1 - nearest neighbor
     """
+    if device is not None and str(device) != 'cpu':
+        return _knn_query_gpu(X, Y, k=k, return_distance=return_distance, metric=metric, device=device)
+
     if metric=='cosine':
         algorithm="auto"
-    else: 
+    else:
         algorithm="kd_tree"
     tree = NearestNeighbors(n_neighbors=k, leaf_size=40,metric=metric, algorithm=algorithm, n_jobs=n_jobs)
     tree.fit(X)
@@ -58,7 +62,31 @@ def knn_query(X, Y, k=1, return_distance=False,metric='minkowski', n_jobs=1):
     return matches
 
 
-def p2p_to_FM(p2p_21, evects1, evects2, A2=None):
+def _knn_query_gpu(X, Y, k=1, return_distance=False, metric='minkowski', device='cuda'):
+    """GPU KNN using torch.cdist."""
+    X_t = _to_torch(X, device)
+    Y_t = _to_torch(Y, device)
+
+    if metric == 'cosine':
+        X_n = torch.nn.functional.normalize(X_t, p=2, dim=1)
+        Y_n = torch.nn.functional.normalize(Y_t, p=2, dim=1)
+        dists = 1.0 - Y_n @ X_n.T  # (n2, n1)
+    else:
+        dists = torch.cdist(Y_t, X_t, p=2)  # (n2, n1)
+
+    topk_dists, topk_idx = torch.topk(dists, k, largest=False, dim=1)
+
+    if k == 1:
+        topk_dists = topk_dists.squeeze(1)
+        topk_idx = topk_idx.squeeze(1)
+
+    matches = topk_idx.cpu().numpy()
+    if return_distance:
+        return topk_dists.cpu().numpy(), matches
+    return matches
+
+
+def p2p_to_FM(p2p_21, evects1, evects2, A2=None, device=None):
     """
     Compute a Functional Map from a vertex to vertex maps (with possible subsampling).
     Can compute with the pseudo inverse of eigenvectors (if no subsampling) or least square.
@@ -71,12 +99,16 @@ def p2p_to_FM(p2p_21, evects1, evects2, A2=None):
     eigvects1 : (n1,k1) eigenvectors on source mesh. Possibly subsampled on the first dimension.
     eigvects2 : (n2,k2) eigenvectors on target mesh. Possibly subsampled on the first dimension.
     A2        : (n2,n2) area matrix of the target mesh. If specified, the eigenvectors can't be subsampled
+    device    : torch device for GPU computation (None for CPU/numpy path)
 
     Outputs
     -------------------------------
     FM_12       : (k2,k1) functional map corresponding to the p2p map given.
                   Solved with pseudo inverse if A2 is given, else using least square.
     """
+    if device is not None and str(device) != 'cpu':
+        return _p2p_to_FM_gpu(p2p_21, evects1, evects2, A2=A2, device=device)
+
     # Pulled back eigenvectors
     evects1_pb = evects1[p2p_21, :] if np.asarray(p2p_21).ndim == 1 else p2p_21 @ evects1
 
@@ -93,7 +125,32 @@ def p2p_to_FM(p2p_21, evects1, evects2, A2=None):
     return scipy.linalg.lstsq(evects2, evects1_pb)[0]  # (k2,k1)
 
 
-def FM_to_p2p(FM_12, evects1, evects2, use_adj=False, n_jobs=1,k=1,metric='minkowski',return_distance=False):
+def _p2p_to_FM_gpu(p2p_21, evects1, evects2, A2=None, device='cuda'):
+    """GPU implementation of p2p_to_FM using torch.linalg.lstsq."""
+    evects1_t = _to_torch(evects1, device)
+    evects2_t = _to_torch(evects2, device)
+    p2p = np.asarray(p2p_21)
+
+    if p2p.ndim == 1:
+        evects1_pb = evects1_t[p2p, :]
+    else:
+        p2p_t = _to_torch(p2p, device)
+        evects1_pb = p2p_t @ evects1_t
+
+    if A2 is not None:
+        A2_t = _to_torch(A2, device)
+        if A2_t.shape[0] != evects2_t.shape[0]:
+            raise ValueError("Can't compute exact pseudo inverse with subsampled eigenvectors")
+        if A2_t.ndim == 1:
+            return (evects2_t.T @ (A2_t[:, None] * evects1_pb)).cpu().numpy()
+        return (evects2_t.T @ (A2_t @ evects1_pb)).cpu().numpy()
+
+    # lstsq on GPU
+    result = torch.linalg.lstsq(evects2_t, evects1_pb).solution
+    return result.cpu().numpy()
+
+
+def FM_to_p2p(FM_12, evects1, evects2, use_adj=False, n_jobs=1,k=1,metric='minkowski',return_distance=False, device=None):
     """
     Obtain a point to point map from a functional map C.
     Compares embeddings of dirac functions on the second mesh Phi_2.T with embeddings
@@ -111,6 +168,7 @@ def FM_to_p2p(FM_12, evects1, evects2, use_adj=False, n_jobs=1,k=1,metric='minko
                 First dimension can be subsampled.
     use_adj   : use the adjoint method
     n_jobs    : number of parallel jobs. Use -1 to use all processes
+    device    : torch device for GPU computation (None for CPU path)
 
 
     Outputs:
@@ -133,11 +191,11 @@ def FM_to_p2p(FM_12, evects1, evects2, use_adj=False, n_jobs=1,k=1,metric='minko
         emb1 = evects1[:, :k1] @ FM_12.T
         emb2 = evects2[:, :k2]
     if return_distance:
-        p2p_21_dist,p2p_21 = knn_query(emb1, emb2,  k=k, n_jobs=n_jobs,metric=metric,return_distance=return_distance)
+        p2p_21_dist,p2p_21 = knn_query(emb1, emb2,  k=k, n_jobs=n_jobs,metric=metric,return_distance=return_distance, device=device)
         return p2p_21_dist,p2p_21
-    
+
     else:
-        p2p_21 = knn_query(emb1, emb2,  k=k, n_jobs=n_jobs,metric=metric,return_distance=return_distance)
+        p2p_21 = knn_query(emb1, emb2,  k=k, n_jobs=n_jobs,metric=metric,return_distance=return_distance, device=device)
     return p2p_21  # (n2,)
 
 
@@ -441,7 +499,7 @@ def get_C0(k1, k2, eigvec1=None, eigvec2=None, optinit="zeros"):
         return x0
 
 
-def rfm(d1: torch.Tensor, d2: torch.Tensor, eigvec1, eigvec2, evals1, evals2, k1=0, k2=0, w_descr=1e-1, w_lap=1e-3, w_dcomm=1, w_orient=0, optinit="zeros"):
+def rfm(d1: torch.Tensor, d2: torch.Tensor, eigvec1, eigvec2, evals1, evals2, k1=0, k2=0, w_descr=1e-1, w_lap=1e-3, w_dcomm=1, w_orient=0, optinit="zeros", device=None):
         """Computes functional map from v1 to v2.
 
         Args:
@@ -453,67 +511,123 @@ def rfm(d1: torch.Tensor, d2: torch.Tensor, eigvec1, eigvec2, evals1, evals2, k1
             evals2: (k2,) tensor, eigenvalues of the second shape
             k1: int, number of eigenvectors to use for the first shape
             k2: int, number of eigenvectors to use for the second shape
+            device: torch device for GPU computation (None for CPU/numpy path)
         Returns:
-            (b2, b1) tensor, functional map from v1 to v2
+            (b2, b1) numpy array, functional map from v1 to v2
         """
-        
-        # py FM
-        # https://github.com/RobinMagnet/pyFM/blob/master/pyFM/functional.py#L361
-        
+
         if k1 == 0:
             k1 = eigvec1.shape[1]
         if k2 == 0:
             k2 = eigvec2.shape[1]
 
-        # Initialization
-        #C0 = get_C0(k1, k2, optinit=optinit) # (b2, b1)
-        C0 = get_C0(k1, k2, optinit=optinit,eigvec1=eigvec1,eigvec2=eigvec2) # (b2, b1)
+        if device is not None and str(device) != 'cpu':
+            return _rfm_gpu(d1, d2, eigvec1, eigvec2, evals1, evals2, k1, k2,
+                            w_descr, w_lap, w_dcomm, w_orient, optinit, device)
 
+        # --- CPU path (original) ---
+        C0 = get_C0(k1, k2, optinit=optinit,eigvec1=eigvec1,eigvec2=eigvec2)
 
-        # Compute descriptors
-        dspec1 = eigvec1[:, :k1].T @ d1 # (k1, nd) tensor, spectral descriptors of v1
-        dspec2 = eigvec2[:, :k2].T @ d2 # (k2, nd) tensor, spectral descriptors of v2
+        dspec1 = eigvec1[:, :k1].T @ d1
+        dspec2 = eigvec2[:, :k2].T @ d2
 
-        # Compute multiplicative operators associated to each descriptor
         list_descr = []
         if w_dcomm > 0:
-            list_descr = compute_descr_op(eigvec1, eigvec2, d1, d2, k1, k2) # (nd, ((k1,k1), (k2,k2)) )
+            list_descr = compute_descr_op(eigvec1, eigvec2, d1, d2, k1, k2)
 
-        # Compute the squared differences between eigenvalues for LB commutativity
-        ev_sqdiff = np.square(evals1[None, :k1] - evals2[:k2, None])  # (n_ev2,n_ev1)
-        # ev_sqdiff /= np.linalg.norm(ev_sqdiff)**2
+        ev_sqdiff = np.square(evals1[None, :k1] - evals2[:k2, None])
         ev_sqdiff /= ev_sqdiff.sum()
 
-        # Compute orientation operators associated to each descriptor
         orient_op = []
-        # if w_orient > 0:
-        #     if verbose:
-        #         print('Computing orientation operators')
-        #     orient_op = self.compute_orientation_op(reversing=orient_reversing)  # (n_descr,)
-        #     args_native = (np.eye(self.k2,self.k1),
-        #                    w_descr, w_lap, w_dcomm, 0,
-        #                    descr1_red, descr2_red, list_descr, orient_op, ev_sqdiff)
-
-        #     eval_native = opt_func.energy_func_std(*args_native)
-        #     eval_orient = opt_func.oplist_commutation(np.eye(self.k2,self.k1), orient_op)
-        #     w_orient *= eval_native / eval_orient
-        #     if verbose:
-        #         print(f'\tScaling orientation preservation weight by {eval_native / eval_orient:.1e}')
-        
 
         args = (w_descr, dspec1, dspec2, w_lap, ev_sqdiff, w_dcomm, list_descr, w_orient, orient_op)
 
-        # print(eigvec1[0],eigvec2[0])
-        # print()
-        # print("---------------------------")
-        # print("descriptorrs")
-        # print(d1[0],d2[0])
-        # print()     
         res = fmin_l_bfgs_b(energy_func_std, C0.ravel(), fprime=grad_energy_std, args=args)
 
         FM = res[0].reshape((k2, k1))
 
         return FM
+
+
+def _to_torch(arr, device):
+    if isinstance(arr, torch.Tensor):
+        return arr.float().to(device)
+    return torch.tensor(np.asarray(arr), dtype=torch.float32, device=device)
+
+
+def _rfm_gpu(d1, d2, eigvec1, eigvec2, evals1, evals2, k1, k2,
+             w_descr, w_lap, w_dcomm, w_orient, optinit, device):
+    """GPU implementation of rfm using torch.optim.LBFGS."""
+    # Move everything to device
+    eigvec1_t = _to_torch(eigvec1, device)
+    eigvec2_t = _to_torch(eigvec2, device)
+    d1_t = _to_torch(d1, device)
+    d2_t = _to_torch(d2, device)
+    evals1_t = _to_torch(evals1, device).flatten()
+    evals2_t = _to_torch(evals2, device).flatten()
+
+    # Spectral descriptors
+    dspec1 = eigvec1_t[:, :k1].T @ d1_t  # (k1, nd)
+    dspec2 = eigvec2_t[:, :k2].T @ d2_t  # (k2, nd)
+
+    # Descriptor multiplication operators
+    list_descr_t = []
+    if w_dcomm > 0:
+        pinv1 = eigvec1_t[:, :k1].T
+        pinv2 = eigvec2_t[:, :k2].T
+        for i in range(d1_t.shape[1]):
+            op1 = pinv1 @ (d1_t[:, i:i+1] * eigvec1_t[:, :k1])
+            op2 = pinv2 @ (d2_t[:, i:i+1] * eigvec2_t[:, :k2])
+            list_descr_t.append((op1, op2))
+
+    # Eigenvalue squared differences
+    ev_sqdiff_t = (evals1_t[None, :k1] - evals2_t[:k2, None]).square()
+    ev_sqdiff_t = ev_sqdiff_t / (ev_sqdiff_t.sum() + 1e-12)
+
+    # Initialize C
+    if optinit == 'identity':
+        C = torch.eye(k2, k1, device=device, dtype=torch.float32)
+    elif optinit == 'random':
+        C = torch.rand(k2, k1, device=device, dtype=torch.float32)
+    else:
+        C = torch.zeros(k2, k1, device=device, dtype=torch.float32)
+
+    # Set first column for constant function equivalence
+    ev_sign = torch.sign(eigvec1_t[0, 0] * eigvec2_t[0, 0])
+    C[:, 0] = 0.0
+    C[0, 0] = ev_sign
+
+    C = C.requires_grad_(True)
+
+    optimizer = torch.optim.LBFGS([C], max_iter=1, line_search_fn='strong_wolfe')
+
+    def closure():
+        optimizer.zero_grad()
+        energy = torch.tensor(0.0, device=device)
+
+        if w_descr > 0:
+            energy = energy + w_descr * 0.5 * (C @ dspec1 - dspec2).square().sum()
+
+        if w_lap > 0:
+            energy = energy + w_lap * 0.5 * (C.square() * ev_sqdiff_t).sum()
+
+        if w_dcomm > 0:
+            for (op1, op2) in list_descr_t:
+                energy = energy + w_dcomm * 0.5 * (C @ op1 - op2 @ C).square().sum()
+
+        energy.backward()
+
+        # Fix first column gradient to 0 (same as CPU path)
+        if C.grad is not None:
+            C.grad[:, 0] = 0.0
+
+        return energy
+
+    for _ in range(100):
+        optimizer.step(closure)
+
+    FM = C.detach().cpu().numpy()
+    return FM
 
 ## Refinement
 
@@ -578,7 +692,7 @@ def farthest_point_sampling_call(d_func, k, n_points=None, verbose=False):
     return np.asarray(inds)
 
 #REGION ZoomOut
-def zoomout_iteration(FM_12, evects1, evects2, step=1, A2=None, n_jobs=1):
+def zoomout_iteration(FM_12, evects1, evects2, step=1, A2=None, n_jobs=1, device=None):
     """
     Performs an iteration of ZoomOut.
 
@@ -592,6 +706,7 @@ def zoomout_iteration(FM_12, evects1, evects2, step=1, A2=None, n_jobs=1):
     step     : int - step of increase of dimension.
     A2       : (n2,n2) sparse area matrix on target mesh, for vertex to vertex computation.
                  If specified, the eigenvectors can't be subsampled !
+    device   : torch device for GPU computation (None for CPU path)
 
     Output
     --------------------
@@ -605,14 +720,14 @@ def zoomout_iteration(FM_12, evects1, evects2, step=1, A2=None, n_jobs=1):
         step2 = step
     new_k1, new_k2 = k1 + step1, k2 + step2
 
-    p2p_21 = FM_to_p2p(FM_12, evects1, evects2, n_jobs=n_jobs)  # (n2,)
+    p2p_21 = FM_to_p2p(FM_12, evects1, evects2, n_jobs=n_jobs, device=device)  # (n2,)
     # Compute the (k2+step, k1+step) FM
-    FM_zo = p2p_to_FM(p2p_21, evects1[:, :new_k1], evects2[:, :new_k2], A2=A2)
+    FM_zo = p2p_to_FM(p2p_21, evects1[:, :new_k1], evects2[:, :new_k2], A2=A2, device=device)
 
     return FM_zo
 
 def zoomout_refine(FM_12, evects1, evects2, nit=10, step=1, A2=None, subsample=None,
-                   return_p2p=False, n_jobs=1, verbose=False):
+                   return_p2p=False, n_jobs=1, verbose=False, device=None):
     """
     Refine a functional map with ZoomOut.
     Supports subsampling for each mesh, different step size, and approximate nearest neighbor.
@@ -628,6 +743,7 @@ def zoomout_refine(FM_12, evects1, evects2, nit=10, step=1, A2=None, subsample=N
     subsample  : tuple or iterable of size 2. Each gives indices of vertices to sample
                  for faster optimization. If not specified, no subsampling is done.
     return_p2p : bool - if True returns the vertex to vertex map.
+    device     : torch device for GPU computation (None for CPU path)
 
     Output
     --------------------
@@ -659,19 +775,19 @@ def zoomout_refine(FM_12, evects1, evects2, nit=10, step=1, A2=None, subsample=N
     for it in iterable:
         if use_subsample:
             FM_12_zo = zoomout_iteration(FM_12_zo, evects1[sub1], evects2[sub2], A2=None,
-                                         step=step, n_jobs=n_jobs)
+                                         step=step, n_jobs=n_jobs, device=device)
 
         else:
             FM_12_zo = zoomout_iteration(FM_12_zo, evects1, evects2, A2=A2,
-                                         step=step, n_jobs=n_jobs)
+                                         step=step, n_jobs=n_jobs, device=device)
 
     if return_p2p:
-        p2p_21_zo = FM_to_p2p(FM_12_zo, evects1, evects2, n_jobs=n_jobs)  # (n2,)
+        p2p_21_zo = FM_to_p2p(FM_12_zo, evects1, evects2, n_jobs=n_jobs, device=device)  # (n2,)
         return FM_12_zo, p2p_21_zo
 
     return FM_12_zo
 
-def graph_zoomout_refine(FM_12, evects1, evects2, G1=None, G2=None, nit=10, step=1, subsample=None, return_p2p=False, n_jobs=1, verbose=False):
+def graph_zoomout_refine(FM_12, evects1, evects2, G1=None, G2=None, nit=10, step=1, subsample=None, return_p2p=False, n_jobs=1, verbose=False, device=None):
     """
     Refines the functional map using ZoomOut and saves the result
 
@@ -686,6 +802,7 @@ def graph_zoomout_refine(FM_12, evects1, evects2, G1=None, G2=None, nit=10, step
     return_p2p : bool - if True returns the vertex to vertex map.
     overwrite : bool - If True changes FM type to 'zoomout' so that next call of self.FM
                 will be the zoomout refined FM (larger than the other 2)
+    device    : torch device for GPU computation (None for CPU path)
     """
     if subsample is None or subsample == 0 or G1 is None or G2 is None:
         sub = None
@@ -695,7 +812,7 @@ def graph_zoomout_refine(FM_12, evects1, evects2, G1=None, G2=None, nit=10, step
         sub = (sub1,sub2)
 
     _FM_zo = zoomout_refine(FM_12, evects1, evects2, nit,step=step, subsample=sub,
-                   return_p2p=False, n_jobs=1, verbose=verbose)
+                   return_p2p=False, n_jobs=1, verbose=verbose, device=device)
 
     return _FM_zo
 #ENDREGION

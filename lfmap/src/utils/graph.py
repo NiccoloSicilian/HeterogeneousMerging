@@ -204,18 +204,19 @@ def farthest_point_sampling_call(d_func, k, n_points=None, verbose=False):
 
 class KnnGraph:
 
-    def __init__(self, data, k=None, p=None, m=3, alpha=None, sigma=None, similarity='euclidean', kernel='gaussian', eta=None):
+    def __init__(self, data, k=None, p=None, m=3, alpha=None, sigma=None, similarity='euclidean', kernel='gaussian', eta=None, device=None):
         self.n = len(data)
         self.m = m
         self.eigvals=None
         self.eigvecs=None
+        self.device = device
         if k is None:
             self.k = int(self.n**(4/(m+4)))
         else:
             self.k = k
         if self.k < np.log(self.n) or self.k > self.n:
             raise ValueError(f'k should be in the range [log(n), n], got {k}')
-        
+
 
         if alpha is None:
             self.alpha = np.pi**(m/2)/gamma(m/2+1)
@@ -232,50 +233,189 @@ class KnnGraph:
         else:
             self.sigma = sigma
 
-        J,D = gl.weightmatrix.knnsearch(data,self.k, similarity=similarity) # J is the index of the k nearest neighbors, D is the distance to the k nearest neighbors
-        W = gl.weightmatrix.knn(None,self.k,knn_data=(J,D),kernel=kernel, eta=eta) # sparse matrix
+        if device is not None and str(device) != 'cpu':
+            self._init_gpu(data, similarity, kernel, eta)
+        else:
+            self._init_cpu(data, similarity, kernel, eta)
+
+    def _init_cpu(self, data, similarity, kernel, eta):
+        J,D = gl.weightmatrix.knnsearch(data,self.k, similarity=similarity)
+        W = gl.weightmatrix.knn(None,self.k,knn_data=(J,D),kernel=kernel, eta=eta)
         self.G = gl.graph(W)
         self.G.W =W
         self.data = data
         self._plot_emb = None
         self.geodesic_distance = None
-    
+
+    def _init_gpu(self, data, similarity, kernel, eta):
+        import scipy.sparse as sp
+        device = self.device
+
+        if isinstance(data, np.ndarray):
+            data_t = torch.tensor(data, dtype=torch.float32, device=device)
+        elif isinstance(data, torch.Tensor):
+            data_t = data.float().to(device)
+        else:
+            data_t = torch.tensor(np.asarray(data), dtype=torch.float32, device=device)
+
+        n = self.n
+        # k+1 because graphlearning counts self as a neighbor then removes it
+        k_search = self.k + 1
+
+        # --- KNN search on GPU ---
+        if similarity == 'cosine' or similarity == 'angular':
+            data_norm = torch.nn.functional.normalize(data_t, p=2, dim=1)
+            # angular distance
+            dists = 1.0 - data_norm @ data_norm.T
+        else:  # euclidean
+            dists = torch.cdist(data_t, data_t, p=2)
+
+        # topk smallest distances (including self which is 0)
+        knn_dist, knn_ind = torch.topk(dists, k_search, largest=False, dim=1)  # (n, k+1)
+
+        # remove self-connections (first column is self with distance 0)
+        knn_dist = knn_dist[:, 1:]  # (n, k)
+        knn_ind = knn_ind[:, 1:]    # (n, k)
+
+        # --- Build weight matrix on GPU (matching graphlearning kernels) ---
+        if eta is not None:
+            D_sq = knn_dist * knn_dist
+            eps = D_sq[:, -1:]  # (n, 1) squared distance to k-th neighbor
+            weights = eta(D_sq / eps)
+        elif kernel == 'gaussian':
+            D_sq = knn_dist * knn_dist
+            eps = D_sq[:, -1:]  # (n, 1)
+            weights = torch.exp(-4.0 * D_sq / (eps + 1e-12))
+        elif kernel == 'symgaussian':
+            eps = knn_dist[:, -1]  # (n,)
+            weights = torch.exp(-4.0 * knn_dist * knn_dist / (eps[:, None] * eps[knn_ind] + 1e-12))
+        elif kernel == 'distance':
+            weights = knn_dist
+        elif kernel == 'singular':
+            weights = knn_dist.clone()
+            weights[weights == 0] = 1.0
+            weights = 1.0 / weights
+        else:  # uniform
+            weights = torch.ones_like(knn_dist)
+
+        # Build sparse-like dense weight matrix
+        row_idx = torch.arange(n, device=device).unsqueeze(1).expand(-1, self.k).reshape(-1)
+        col_idx = knn_ind.reshape(-1)
+        w_vals = weights.reshape(-1)
+
+        W_dense = torch.zeros(n, n, dtype=torch.float32, device=device)
+        W_dense[row_idx, col_idx] = w_vals
+
+        # Symmetrize (matching graphlearning behavior)
+        if kernel in ('distance', 'uniform', 'singular'):
+            W_dense = torch.maximum(W_dense, W_dense.T)
+        elif kernel == 'symgaussian':
+            W_T = W_dense.T
+            mask = W_T > W_dense
+            W_dense = W_dense + W_T * mask - W_dense * mask
+        else:
+            W_dense = (W_dense + W_dense.T) / 2.0
+
+        # Remove self-loops
+        W_dense.fill_diagonal_(0.0)
+
+        self._W_gpu = W_dense
+        self.data = data
+
+        # Build CPU gl.graph for geodesic distances and connectivity checks
+        W_cpu = W_dense.cpu().numpy()
+        W_sparse = sp.csr_matrix(W_cpu)
+        self.G = gl.graph(W_sparse)
+        self.G.W = W_sparse
+
+        self._plot_emb = None
+        self.geodesic_distance = None
+
     def compute_laplacian(self, normalization='normalized', alpha=1):
+        if self.device is not None and str(self.device) != 'cpu' and hasattr(self, '_W_gpu'):
+            return self._compute_laplacian_gpu(normalization=normalization)
         L = self.G.laplacian(normalization=normalization ,alpha=alpha)
-        # L = (2*self.p**(2/self.m)/self.sigma)*L*((self.n*self.alpha/self.k)**(1+2/self.m))/self.n
         return L
-    
+
+    def _compute_laplacian_gpu(self, normalization='normalized'):
+        W = self._W_gpu
+        d = W.sum(dim=1)
+        if normalization == 'normalized':
+            d_inv_sqrt = 1.0 / torch.sqrt(d + 1e-12)
+            D_inv_sqrt = torch.diag(d_inv_sqrt)
+            L = torch.eye(self.n, device=self.device, dtype=W.dtype) - D_inv_sqrt @ W @ D_inv_sqrt
+        elif normalization == 'randomwalk':
+            d_inv = 1.0 / (d + 1e-12)
+            D_inv = torch.diag(d_inv)
+            L = torch.eye(self.n, device=self.device, dtype=W.dtype) - D_inv @ W
+        else:  # combinatorial
+            L = torch.diag(d) - W
+        return L
+
     def eigen_decomp(self, normalization='normalized', method='exact', k=10, c=None, gamma=0, tol=0, q=1):
+        if self.device is not None and str(self.device) != 'cpu' and hasattr(self, '_W_gpu'):
+            return self._eigen_decomp_gpu(normalization=normalization, k=k)
         return self.G.eigen_decomp(normalization=normalization, method=method, k=k, c=c, gamma=gamma, tol=tol, q=q)
-    
+
+    def _eigen_decomp_gpu(self, normalization='normalized', k=10):
+        """GPU eigen decomposition matching graphlearning's approach.
+
+        For 'normalized': computes A = D^{-1/2} W D^{-1/2}, does SVD,
+        eigenvalues = 1 - singular_values.
+        """
+        W = self._W_gpu
+        d = W.sum(dim=1)
+        d_inv_sqrt = 1.0 / torch.sqrt(d + 1e-12)
+
+        if normalization in ('normalized', 'randomwalk'):
+            # A = D^{-1/2} W D^{-1/2}
+            A = d_inv_sqrt[:, None] * W * d_inv_sqrt[None, :]
+            # Symmetric matrix → use eigh (faster than svd for symmetric)
+            # eigenvalues of A are 1 - eigenvalues of L_sym
+            eig_vals_A, eig_vecs_A = torch.linalg.eigh(A)
+            # eigh returns ascending order; we want largest eigenvalues of A = smallest of L
+            vals = 1.0 - eig_vals_A.flip(0)[:k]
+            vecs = eig_vecs_A.flip(1)[:, :k]
+
+            if normalization == 'randomwalk':
+                vecs = torch.diag(d_inv_sqrt) @ vecs
+        else:
+            # combinatorial
+            L = torch.diag(d) - W
+            vals_all, vecs_all = torch.linalg.eigh(L)
+            vals = vals_all[:k]
+            vecs = vecs_all[:, :k]
+
+        return vals.cpu().numpy(), vecs.cpu().numpy()
+
     @property
     def edges(self):
         return np.stack(self.G.weight_matrix.nonzero(), axis=1)
-    
+
     @property
     def plot_emb(self):
         if self._plot_emb is None:
             self._plot_emb = MDS_embedding(self.G)
         return self._plot_emb
-    
+
     def plotly_trace(self, size=5, color='blue', **kwargs):
         x_lines = np.concatenate([ [self.plot_emb[i,0], self.plot_emb[j,0], None] for i,j in self.edges])
         y_lines = np.concatenate([ [self.plot_emb[i,1], self.plot_emb[j,1], None] for i,j in self.edges])
-        
+
         trace = [go.Scatter(x=x_lines, y=y_lines, mode='lines', name='edges', line=dict(width=0.5 , color="grey")),
                 go.Scatter(x=self.plot_emb[:,0], y=self.plot_emb[:,1], mode='markers', name='nodes', marker=dict(size=size, color=color), **kwargs)]
-        
+
         return trace
-    
+
     def extract_fps(self, n_points):
         d_func = lambda i: self.G.distance(i, 0,return_distance_vector=True)[1]
         return farthest_point_sampling_call(d_func, n_points, n_points=self.n, verbose=False)
-    
+
     def distance_matrix(self, centered=False):
         if self.geodesic_distance is None:
             self.geodesic_distance = self.G.distance_matrix(centered=centered)
         return self.geodesic_distance
-    
+
     def distance(self, source, target=None):
         if target is None:
             return self.G.distance(source, 0, return_distance_vector=True)[1]
@@ -360,9 +500,9 @@ class BallGraph:
     
 
 def build_graph(data, k=None, algo='knn', similarity='euclidean', kernel='uniform', sigma=None,
-                 p=None, m=3, eta=None, alpha=1, **kwargs ):
+                 p=None, m=3, eta=None, alpha=1, device=None, **kwargs ):
     if algo=='knn':
-        G = KnnGraph(data, k, similarity=similarity, p=p, m=m, alpha=alpha, sigma=sigma, kernel=kernel, eta=eta)
+        G = KnnGraph(data, k, similarity=similarity, p=p, m=m, alpha=alpha, sigma=sigma, kernel=kernel, eta=eta, device=device)
     elif algo=='epsball':
         G = BallGraph(data, k, similarity=similarity, p=p, m=m, alpha=alpha, sigma=sigma, kernel=kernel, eta=eta)
     elif algo=='knnball':

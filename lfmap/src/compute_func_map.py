@@ -19,7 +19,7 @@ N =120
 n_anchor = 20
 anchors = torch.stack([torch.arange(0, n_anchor), torch.arange(0, n_anchor)], 1)
 
-model_dir = '/kaggle/working'
+model_dir = '/leonardo_scratch/fast/IscrC_eff-SAM2/HeterogeneousMerging'
 act_dir = os.path.join(model_dir, 'activations')
 
 # ==========================================
@@ -139,7 +139,6 @@ def compute_single_fmap(x_np, y_np, anchors, N, label,layer_index, pre_or_post,n
             n_descr=1,
             compute_gt_map=False,
             refine=True,
-            device=torch.device('cuda'),
         )
         print(f"    FM computed in {time.time()-t0:.1f}s — similarity: {fmap.get_similarity():.4f}")
         print(f"    C shape: {np.array(fmap.C).shape}")
