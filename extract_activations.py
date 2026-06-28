@@ -4,8 +4,10 @@ import torch
 import torch.nn as nn
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
+from scipy.special import erf
 
-from scipy.special import erf 
+from parameter_config import EXTRACT_ACTIVATION, USE_RELU
+from utils import ACTIVATION_TYPES, ACTIVATION_FUNCTIONS, build_dense_model
 
 
 def extract_all_activations(model, loader, N, device):

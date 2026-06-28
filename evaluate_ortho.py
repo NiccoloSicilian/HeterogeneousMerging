@@ -6,6 +6,13 @@ import numpy as np
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, Subset
 
+from parameter_config import (
+    TRANSPORT_ORTHO, USE_RELU,
+    MNIST_STD_MODEL, MNIST_WIDE_MODEL,
+    FMNIST_STD_MODEL, FMNIST_WIDE_MODEL,
+)
+from utils import build_dense_model
+
 
 
 def evaluate(model, loader, device, name):

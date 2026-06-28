@@ -5,31 +5,8 @@ import torch.optim as optim
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
 
+from parameter_config import TRAIN_CONFIG, USE_RELU
 from utils import build_dense_model
-
-USE_RELU = True
-
-TRAIN_CONFIG = {
-    'target_model': {
-        'name': 'standard',
-        'hidden_size_1': 256,
-        'hidden_size_2': 128,
-    },
-    'source_model': {
-        'name': 'wide',
-        'hidden_size_1': 1024,
-        'hidden_size_2': 512,
-    },
-    'pretrained_dataset': 'mnist',
-    'finetuned_dataset': 'fashion',
-    'pretrain_epochs': 5,
-    'pretrain_lr': 1e-3,
-    'finetune_epochs': 7,
-    'finetune_lr': 1e-4,
-    'batch_size_train': 128,
-    'batch_size_test': 256,
-    'save_dir': '/kaggle/working/models',
-}
 
 
 DATASET_REGISTRY = {

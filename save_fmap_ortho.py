@@ -1,6 +1,8 @@
 import os
 import numpy as np
 
+from parameter_config import USE_RELU, EXTRACT_FMAP_ORTHO
+
 """
 EXTRACT_FMAP_ORTHO: list of (fmap_dict_file, output_name) tuples.
 

@@ -3,39 +3,13 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 
+from parameter_config import COMPUTE_ORTHO_MAP, USE_RELU
+from utils import get_activations_array, has_activation, layer_keys
+
 
 # ============================================================
 # Core computation
 # ============================================================
-
-def get_activations_array(act_dict, layer_name, use_post):
-    """
-    Get the right activation array from a layer entry.
-    Handles both old format (pre, act_name) and new format (pre, post, act_name).
-    """
-    entry = act_dict[layer_name]
-    if len(entry) == 3:
-        pre, post, act_name = entry
-        if use_post and post is not None:
-            return post
-        return pre
-    else:
-        return entry[0]
-
-
-def has_activation(act_dict, layer_name):
-    """Check if a layer has an activation function after it."""
-    entry = act_dict[layer_name]
-    if len(entry) == 3:
-        return entry[1] is not None
-    else:
-        return entry[1] is not None and entry[1] != 'None'
-
-
-def layer_keys(act_dict):
-    """Return layer names, excluding metadata keys like _labels."""
-    return [k for k in act_dict.keys() if not k.startswith('_')]
-
 
 def procrustes(H_A, H_B, device, rank=None):
     """
