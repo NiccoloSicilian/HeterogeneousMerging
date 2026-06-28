@@ -2,6 +2,7 @@ from torchvision import datasets
 from utils import (
     method_gvendi_interpolated,
     preprocess_mean_center_frobenius,
+    method_gvendi
 )
 from experiments_utils import (
     load_paired_boundary_data,
@@ -57,11 +58,11 @@ EXTRACT_ACTIVATION = {
   'N': 10000,                                                                                                                                                                                                                                      
   'save_dir': '/kaggle/working',                                                                                                                                                                                                                   
   'to_extract': [ 
-      {'using': 'standard',    'method': method_gvendi_interpolated, 'params': {**gvendi_params, 'interp_number': 100, 'seed': 42}, 'filename': 'standard_fashion'},
-      {'using': 'wide',        'method': method_gvendi_interpolated, 'params': {**gvendi_params, 'interp_number': 100, 'seed': 42}, 'filename': 'wide_fashion'},
+      #{'using': 'standard',    'method': method_gvendi_interpolated, 'params': {**gvendi_params, 'interp_number': 100, 'seed': 42}, 'filename': 'standard_fashion'},
+      #{'using': 'wide',        'method': method_gvendi_interpolated, 'params': {**gvendi_params, 'interp_number': 100, 'seed': 42}, 'filename': 'wide_fashion'},
   
-      #{'using': 'standard', 'method': method_gvendi, 'params': gvendi_params, 'filename': 'standard_fashion'},                                                                                                                                     
-      #{'using': 'wide',     'method': method_gvendi, 'params': gvendi_params, 'filename': 'wide_fashion'},            
+      {'using': 'standard', 'method': method_gvendi, 'params': gvendi_params, 'filename': 'standard_fashion'},                                                                                                                                     
+      {'using': 'wide',     'method': method_gvendi, 'params': gvendi_params, 'filename': 'wide_fashion'},            
       
       #{'using': 'wide_ft',     'method': method_gvendi, 'params': gvendi_params, 'filename': 'wide_ft_fashion'},       
       #{'using': 'standard_ft', 'method': method_gvendi, 'params': gvendi_params, 'filename': 'standard_ft_fashion'},   
