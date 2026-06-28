@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import os
 
-from utils import load_act, layer_keys, has_activation, get_activations_array
+from merge_utils import load_act, layer_keys, has_activation, get_activations_array
 
 
 def load_cov_spectrum_data(load_params):

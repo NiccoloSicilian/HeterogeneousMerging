@@ -11,7 +11,7 @@ from parameter_config import (
     MNIST_STD_MODEL, MNIST_WIDE_MODEL,
     FMNIST_STD_MODEL, FMNIST_WIDE_MODEL,
 )
-from utils import build_dense_model, DATA_DIR
+from merge_utils import build_dense_model, DATA_DIR
 
 
 

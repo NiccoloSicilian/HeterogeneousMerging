@@ -6,7 +6,7 @@ from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
 
 from parameter_config import TRAIN_CONFIG, USE_RELU
-from utils import build_dense_model, DATA_DIR
+from merge_utils import build_dense_model, DATA_DIR
 
 
 DATASET_REGISTRY = {

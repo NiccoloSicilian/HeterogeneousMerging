@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from parameter_config import COMPUTE_ORTHO_MAP, USE_RELU
-from utils import get_activations_array, has_activation, layer_keys
+from merge_utils import get_activations_array, has_activation, layer_keys
 
 
 # ============================================================

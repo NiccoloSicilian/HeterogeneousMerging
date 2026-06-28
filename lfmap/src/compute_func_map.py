@@ -8,6 +8,7 @@ import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 import scipy.sparse.linalg._eigen._svds as _svds_module
 from estimators.FM import FM_T
+from parameter_config import USE_RELU, COMPUTE_FMAPS
 
 if USE_RELU:
     suffix='_relu'

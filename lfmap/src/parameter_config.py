@@ -1,5 +1,5 @@
 from torchvision import datasets
-from utils import (
+from merge_utils import (
     method_gvendi_interpolated,
     preprocess_mean_center_frobenius,
     method_gvendi
