@@ -11,7 +11,7 @@ from parameter_config import (
     MNIST_STD_MODEL, MNIST_WIDE_MODEL,
     FMNIST_STD_MODEL, FMNIST_WIDE_MODEL,
 )
-from utils import build_dense_model
+from utils import build_dense_model, DATA_DIR
 
 
 
@@ -171,9 +171,9 @@ if TRANSPORT_ORTHO is not None:
     ])
     N_map = 5000
 
-    mnist_test     = datasets.MNIST(root='/kaggle/working/data', train=False, download=True, transform=mnist_transform)
+    mnist_test     = datasets.MNIST(root=DATA_DIR, train=False, download=True, transform=mnist_transform)
     mnist_loader   = DataLoader(mnist_test, batch_size=256, shuffle=False)
-    fashion_test   = datasets.FashionMNIST(root='/kaggle/working/data', train=False, download=True, transform=fashion_transform)
+    fashion_test   = datasets.FashionMNIST(root=DATA_DIR, train=False, download=True, transform=fashion_transform)
     fashion_loader = DataLoader(fashion_test, batch_size=256, shuffle=False)
     fashion_subset_loader = DataLoader(
         Subset(fashion_test, list(range(N_map))),

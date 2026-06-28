@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 from scipy.special import erf
 
 from parameter_config import EXTRACT_ACTIVATION, USE_RELU
-from utils import ACTIVATION_TYPES, ACTIVATION_FUNCTIONS, build_dense_model
+from utils import ACTIVATION_TYPES, ACTIVATION_FUNCTIONS, build_dense_model, DATA_DIR
 
 
 def extract_all_activations(model, loader, N, device):
@@ -203,7 +203,7 @@ def method_interpolated(model, N, device, params):
         transforms.ToTensor(),
         transforms.Normalize(params['mean'], params['std']),
     ])
-    ds = params['dataset'](root='/kaggle/working/data', train=True, download=True, transform=tf)
+    ds = params['dataset'](root=DATA_DIR, train=True, download=True, transform=tf)
     loader = DataLoader(ds, batch_size=256, shuffle=True, generator=g)
     activations = extract_all_activations(model, loader, N, device)
     labels = activations.pop('_labels', None)

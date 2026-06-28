@@ -7,6 +7,8 @@ from scipy.special import erf
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, Subset
 
+DATA_DIR = '/leonardo_scratch/fast/IscrC_eff-SAM2/HeterogeneousMerging/datasets'
+
 ACTIVATION_TYPES = (
     nn.ReLU, nn.Sigmoid, nn.Tanh, nn.GELU, nn.LeakyReLU,
     nn.ELU, nn.SELU, nn.Softmax, nn.LogSoftmax, nn.Hardswish,
@@ -565,7 +567,7 @@ def method_gvendi(model, N, device, params):
         transforms.ToTensor(),
         transforms.Normalize(params['mean'], params['std']),
     ])
-    dataset = params['dataset'](root='/kaggle/working/data', train=True, download=True, transform=tf)
+    dataset = params['dataset'](root=DATA_DIR, train=True, download=True, transform=tf)
     n_classes = params.get('n_classes', 10)
     n_subsets = params.get('n_subsets', 5)
     subset_size = params['subset_size']
@@ -627,7 +629,7 @@ def method_full(model, N, device, params):
         transforms.ToTensor(),
         transforms.Normalize(params['mean'], params['std']),
     ])
-    ds = params['dataset'](root='/kaggle/working/data', train=True, download=True, transform=tf)
+    ds = params['dataset'](root=DATA_DIR, train=True, download=True, transform=tf)
     loader = DataLoader(ds, batch_size=256, shuffle=True, generator=g)
     return extract_all_activations(model, loader, N, device)
 
@@ -643,7 +645,7 @@ def method_interpolated(model, N, device, params):
         transforms.ToTensor(),
         transforms.Normalize(params['mean'], params['std']),
     ])
-    ds = params['dataset'](root='/kaggle/working/data', train=True, download=True, transform=tf)
+    ds = params['dataset'](root=DATA_DIR, train=True, download=True, transform=tf)
     loader = DataLoader(ds, batch_size=256, shuffle=True, generator=g)
     activations = extract_all_activations(model, loader, N, device)
     labels = activations.pop('_labels', None)

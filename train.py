@@ -6,7 +6,7 @@ from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
 
 from parameter_config import TRAIN_CONFIG, USE_RELU
-from utils import build_dense_model
+from utils import build_dense_model, DATA_DIR
 
 
 DATASET_REGISTRY = {
@@ -29,7 +29,7 @@ def get_loader(dataset_name, train, batch_size, device):
         transforms.ToTensor(),
         transforms.Normalize(ds_info['mean'], ds_info['std']),
     ])
-    ds = ds_info['class'](root='data', train=train, download=True, transform=tf)
+    ds = ds_info['class'](root=DATA_DIR, train=train, download=True, transform=tf)
     pin = (device == 'cuda')
     return DataLoader(ds, batch_size=batch_size, shuffle=train, num_workers=4, pin_memory=pin)
 

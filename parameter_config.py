@@ -14,19 +14,19 @@ FMNIST_STD_MODEL = "/kaggle/input/models/niccolosici/fashionmnistft-std-gelu/oth
 FMNIST_WIDE_MODEL = "/kaggle/input/models/niccolosici/fashionmnistft-wide-gelu/other/default/1/wide_finetuned_gelu.pth"#"/kaggle/working/models/wide_finetuned_relu.pth"
 
 TRAIN = True
-gvendi_params = {                           
-  'dataset': datasets.FashionMNIST,       
-  'mean': (0.2860,),                  
-  'std': (0.3530,),                                                                                                                                                                                                                                
-  'proxy_weights': MNIST_STD_MODEL,                                                                                                                                                                                                                
-  'proxy_hidden_size_1': 256,                                                                                                                                                                                                                      
-  'proxy_hidden_size_2': 128,                                                                                                                                                                                                                      
-  'subset_size': 20,                                                                                                                                                                                                                            
-  'n_subsets': 10,                                                                                                                                                                                                                                  
-  'n_pool': 5000,                                                                                                                                                                                                                                
-  'k_per_class': 10,                                                                                                                                                                                                                               
-  'proj_dim': 1024,                                                                                                                                                                                                                                
-  'n_classes': 10,                        
+gvendi_params = {
+  'dataset': datasets.FashionMNIST,
+  'mean': (0.2860,),
+  'std': (0.3530,),
+  'proxy_weights': MNIST_STD_MODEL,
+  'proxy_hidden_size_1': 256,
+  'proxy_hidden_size_2': 128,
+  'subset_size': 20,
+  'n_subsets': 10,
+  'n_pool': 5000,
+  'k_per_class': 10,
+  'proj_dim': 1024,
+  'n_classes': 10,
 }                                                                                                                                                                                                                                                    
 '''
 'to_extract': [                                                                                                                                                                                                                                  
@@ -243,7 +243,7 @@ TRAIN_CONFIG = {
       'finetune_lr': 1e-4,                
       'batch_size_train': 128,
       'batch_size_test': 256,                                                                                                                                                                                                                          
-      'save_dir': '/kaggle/working/models',
+      'save_dir': '/leonardo_scratch/fast/IscrC_eff-SAM2/HeterogeneousMerging/models',
   }  
 
 COMPUTE_FMAPS = [
