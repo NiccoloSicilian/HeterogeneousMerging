@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 from scipy.special import erf
 
 from parameter_config import EXTRACT_ACTIVATION, USE_RELU
-from utils import ACTIVATION_TYPES, ACTIVATION_FUNCTIONS, build_dense_model, DATA_DIR
+from utils import ACTIVATION_TYPES, ACTIVATION_FUNCTIONS, build_dense_model, DATA_DIR, method_gvendi
 
 
 def extract_all_activations(model, loader, N, device):
