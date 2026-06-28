@@ -772,7 +772,7 @@ def collect_gradients(model, loader, n_samples, device="cpu"):
     return G, np.array(all_labels)
 
 def build_dense_model(hidden_size_1, hidden_size_2, use_relu=True):
-    return build_small_model(hidden_size_1, hidden_size_2, use_relu=True)
+    return build_more_dense_model(hidden_size_1, hidden_size_2, use_relu=True)
     
 def build_small_model(hidden_size_1, hidden_size_2, use_relu=True):
     layers = [
